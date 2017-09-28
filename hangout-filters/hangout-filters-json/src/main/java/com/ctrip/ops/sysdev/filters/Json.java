@@ -3,29 +3,34 @@ package com.ctrip.ops.sysdev.filters;
 import java.util.Map;
 
 import com.ctrip.ops.sysdev.baseplugin.BaseFilter;
-import org.apache.log4j.Logger;
+import com.ctrip.ops.sysdev.fieldSetter.FieldSetter;
+import com.ctrip.ops.sysdev.render.TemplateRender;
+import lombok.extern.log4j.Log4j2;
 import org.json.simple.JSONValue;
 
-@SuppressWarnings("ALL")
+@Log4j2
 public class Json extends BaseFilter {
-    private static final Logger logger = Logger.getLogger(Json.class.getName());
 
     public Json(Map config) {
         super(config);
     }
 
-    private String field, target;
+    private String field;
+    private TemplateRender templateRender;
+    private FieldSetter fieldSetter;
 
     protected void prepare() {
         if (!config.containsKey("field")) {
-            logger.error("no field configured in Json");
+            log.error("no field configured in Json");
             System.exit(1);
         }
         this.field = (String) config.get("field");
 
-        this.target = (String) config.get("target");
-        if (this.target != null && this.target.equals("")) {
-            this.target = null;
+        String target = (String) config.get("target");
+        if (target == null || target.equals("")) {
+            this.fieldSetter = null;
+        } else {
+            this.fieldSetter = FieldSetter.getFieldSetter(target);
         }
 
         if (config.containsKey("tag_on_failure")) {
@@ -33,33 +38,41 @@ public class Json extends BaseFilter {
         } else {
             this.tagOnFailure = "jsonfail";
         }
+
+        try {
+            this.templateRender = TemplateRender.getRender(field, false);
+        } catch (Exception e) {
+            log.error("could not render template: " + field);
+            System.exit(1);
+        }
     }
 
     @Override
     protected Map filter(final Map event) {
         Object obj = null;
         boolean success = false;
-        if (event.containsKey(this.field)) {
+
+        Object o = this.templateRender.render(event);
+        if (o != null) {
             try {
                 obj = JSONValue
-                        .parseWithException((String) event.get(this.field));
+                        .parseWithException((String) o);
                 success = true;
             } catch (Exception e) {
-                logger.debug("failed to json parse field: " + this.field);
+                log.debug("failed to json parse field: " + this.field);
             }
         }
 
-
         if (obj != null) {
-            if (this.target == null) {
+            if (this.fieldSetter == null) {
                 try {
                     event.putAll((Map) obj);
                 } catch (Exception e) {
-                    logger.warn(this.field + " is not a map, you should set a target to save it");
+                    log.warn(this.field + " is not a map, you should set a target to save it");
                     success = false;
                 }
             } else {
-                event.put(this.target, obj);
+                this.fieldSetter.setField(event, obj);
             }
         }
 
